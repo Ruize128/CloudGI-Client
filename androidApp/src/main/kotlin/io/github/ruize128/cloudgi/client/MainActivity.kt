@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
 import io.github.ruize128.cloudgi.client.streaming.CloudGiConnector
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -34,7 +35,9 @@ class MainActivity : ComponentActivity() {
                         try {
                             val intent = connector.connect { message -> android.util.Log.i("CloudGI", message); withContext(Dispatchers.Main) { status = message } }
                             startActivity(intent)
-                            status = "串流已打开，再次点击可重新连接。"
+                            status = "已打开串流页面；断开连接后，Host 会自动退出游戏。"
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
                         } catch (error: Exception) {
                             android.util.Log.w("CloudGI", "Connection failed: ${error.javaClass.simpleName}: ${error.message}")
                             status = error.message ?: "连接失败，请重试。"

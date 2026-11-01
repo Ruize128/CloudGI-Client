@@ -72,11 +72,13 @@ class CloudGiConnector(private val context: Context) {
     suspend fun refreshDiscovery() { discoverCandidates(force = true) }
 
     private data class Endpoint(val address: String, val port: Int)
-    private data class Host(val endpoint: Endpoint, val id: String, val name: String, val httpsPort: Int, val certificate: X509Certificate)
+    private data class Host(val endpoint: Endpoint, val id: String, val name: String, val httpsPort: Int, val certificate: X509Certificate, val gameControl: String, val disconnectPolicy: String)
 
     suspend fun connect(progress: suspend (String) -> Unit): Intent = withContext(Dispatchers.IO) {
         progress("正在自动发现 CloudGI 主机…")
         val host = discover()
+        if (host.gameControl != "signed-request-v1") throw IOException("此 Host 尚不支持手机启动游戏，请更新电脑端 CloudGI Host。")
+        if (host.disconnectPolicy != "close-game-lease-v1") throw IOException("请更新 Host，以支持断开连接后自动退出游戏。")
         progress("已发现 ${host.name}，正在连接…")
         android.util.Log.i("CloudGI", "CloudGI host discovered: ${host.name}")
         val crypto = PlatformBinding.getCryptoProvider(context)
@@ -113,16 +115,21 @@ class CloudGiConnector(private val context: Context) {
         check(saved.edit().putString("hostId", host.id).putString("address", host.endpoint.address)
             .putInt("port", host.endpoint.port)
             .putString("certificate-${host.id}", Base64.encodeToString(host.certificate.encoded, Base64.NO_WRAP)).commit())
-        progress("正在打开桌面串流…")
         val desktop = http.appList.firstOrNull { it.appName == "Desktop" }
             ?: throw IOException("CloudGI 主机未提供 Desktop 串流入口。")
+        val control = CloudGiGameControl(context, host.endpoint.address, host.endpoint.port, host.certificate)
+        val operationId = startGame(control, progress)
+        progress("游戏进程已运行，正在连接串流…")
         // Keep the physical display and game resolution unchanged. This is the initial video encoding preset.
         android.preference.PreferenceManager.getDefaultSharedPreferences(context).edit()
             .putString("list_resolution", "1280x720").putString("list_fps", "60")
             .putInt("seekbar_bitrate_kbps", 10000).putBoolean("checkbox_enable_hdr", false)
             .putBoolean("checkbox_show_onscreen_controls", false).apply()
         android.util.Log.i("CloudGI", "Opening native Desktop stream")
-        Intent(context, Game::class.java).apply {
+        // Host now owns a lease: a failed launch or killed client will be cleaned up after its timeout.
+        control.request("game/stream/$operationId", post = true)
+        Intent(context, CloudGiGameActivity::class.java).apply {
+            putExtra(CloudGiGameActivity.EXTRA_REQUEST_ID, operationId)
             putExtra(Game.EXTRA_HOST, host.endpoint.address)
             putExtra(Game.EXTRA_PORT, host.endpoint.port)
             putExtra(Game.EXTRA_HTTPS_PORT, host.httpsPort)
@@ -136,8 +143,35 @@ class CloudGiConnector(private val context: Context) {
         }
     }
 
+    private suspend fun startGame(control: CloudGiGameControl, progress: suspend (String) -> Unit): String {
+        progress("正在请求 Host 启动游戏…")
+        // A request ID identifies one button press. Polling and HTTP disconnects never resubmit a launch.
+        val requestId = UUID.randomUUID().toString().replace("-", "")
+        var snapshot = control.request("game/start/$requestId", post = true)
+        val operationId = snapshot.getString("requestId")
+        if (!operationId.matches(Regex("[a-fA-F0-9]{32}"))) throw IOException("Host 返回了无效的启动请求标识。")
+        val deadline = android.os.SystemClock.elapsedRealtime() + 120_000
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            when (snapshot.getString("state")) {
+                "running" -> {
+                    if (snapshot.optInt("processId", 0) <= 0) throw IOException("Host 未返回有效的游戏进程。")
+                    android.util.Log.i("CloudGI", "Host confirmed game process; opening stream")
+                    return operationId
+                }
+                "failed", "exited" -> throw IOException(snapshot.optString("error").ifBlank { "游戏未能启动，请查看 Host。" })
+                "starting" -> progress("正在启动游戏；如电脑显示 Windows 授权提示，请在电脑上确认…")
+                else -> throw IOException("Host 返回了未知的游戏状态。")
+            }
+            if (android.os.SystemClock.elapsedRealtime() >= deadline)
+                throw IOException("等待游戏启动超时，请查看电脑上的授权提示和 Host 状态；游戏不会因超时被关闭。")
+            delay(1000)
+            snapshot = control.request("game/status/$operationId", post = false)
+        }
+    }
+
     private fun controlUrl(endpoint: Endpoint, operation: String) = HttpUrl.Builder().scheme("https")
-        .host(endpoint.address).port(endpoint.port + 2).addPathSegment("cloudgi").addPathSegment(operation).build()
+        .host(endpoint.address).port(endpoint.port + 2).addPathSegment("cloudgi").addPathSegments(operation).build()
 
     private fun tlsClient(expected: X509Certificate?, timeout: Long, observed: ((X509Certificate) -> Unit)? = null): OkHttpClient {
         val trust = object : X509TrustManager {
@@ -172,7 +206,7 @@ class CloudGiConnector(private val context: Context) {
                 val stored = saved.getString("certificate-$id", null)
                 if (stored != null && !MessageDigest.isEqual(Base64.decode(stored, Base64.NO_WRAP), certificate!!.encoded))
                     throw CertificateException("主机证书变化，已停止连接")
-                val host = Host(endpoint, id, data.getString("name"), data.getInt("sunshineHttpsPort"), certificate!!)
+                val host = Host(endpoint, id, data.getString("name"), data.getInt("sunshineHttpsPort"), certificate!!, data.optString("gameControl"), data.optString("disconnectPolicy"))
                 updateEndpoint(endpoint, "CloudGI 接口验证通过", host)
                 host
             }

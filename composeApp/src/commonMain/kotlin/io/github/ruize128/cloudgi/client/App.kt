@@ -72,7 +72,7 @@ fun App(
                 Button(onClick = { onStartGame?.invoke() }, enabled = onStartGame != null && !isConnecting,
                     modifier = Modifier.fillMaxWidth()) { Text(if (isConnecting) "正在连接…" else "启动游戏") }
                 if (isConnecting) CircularProgressIndicator()
-                Text(connectionState.ifEmpty { if (onStartGame != null) "自动发现主机并连接桌面串流" else "串流连接目前支持 Android" })
+                Text(connectionState.ifEmpty { if (onStartGame != null) "自动发现并配对主机，启动游戏后连接串流；断开会自动退出游戏" else "串流连接目前支持 Android" })
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
@@ -118,7 +118,7 @@ fun App(
                         Info("版本", "0.1.0")
                         Info("当前环境", platformName)
                         Info("目标平台", "Android 优先，随后 iOS、macOS")
-                        Info("当前阶段", "桌面串流 · 自动配对")
+                        Info("当前阶段", "远程启动游戏 · 自动配对串流")
                     }
                 }
                 Spacer(Modifier.height(4.dp))
