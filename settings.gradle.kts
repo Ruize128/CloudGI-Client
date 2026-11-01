@@ -10,8 +10,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://jitpack.io")
     }
 }
 
 rootProject.name = "CloudGI-Client"
-include(":composeApp", ":androidApp")
+include(":composeApp", ":androidApp", ":moonlightAndroid")

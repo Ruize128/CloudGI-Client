@@ -24,5 +24,7 @@ android {
 
 dependencies {
     implementation(project(":composeApp"))
+    implementation(project(":moonlightAndroid"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation(libs.androidx.activity.compose)
 }
