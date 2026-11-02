@@ -21,17 +21,26 @@ class MainActivity : ComponentActivity() {
             val scope = rememberCoroutineScope()
             var connecting by remember { mutableStateOf(false) }
             var status by remember { mutableStateOf("") }
+            var connectionError by remember { mutableStateOf<String?>(null) }
+            val selectedHostId by connector.selectedHostId.collectAsState()
             val hosts by connector.discoveredHosts.collectAsState()
             val discoveryStatus by connector.discoveryStatus.collectAsState()
             val searching by connector.isSearching.collectAsState()
             LaunchedEffect(connector) { connector.refreshDiscovery() }
             App(platformName = "Android ${Build.VERSION.RELEASE} · API ${Build.VERSION.SDK_INT}",
-                connectionState = status, isConnecting = connecting,
+                connectionState = status, connectionError = connectionError, isConnecting = connecting,
+                selectedHostId = selectedHostId,
+                onSelectHost = { id ->
+                    connector.selectHost(id)
+                    connectionError = null
+                    status = "已选择主机，点击启动游戏连接。"
+                },
                 discoveredHosts = hosts, discoveryStatus = discoveryStatus, isSearching = searching,
                 onRefreshSearch = { if (!connecting && !searching) scope.launch { connector.refreshDiscovery() } },
                 onStartGame = {
                     if (!connecting) scope.launch {
                         connecting = true
+                        connectionError = null
                         try {
                             val intent = connector.connect { message -> android.util.Log.i("CloudGI", message); withContext(Dispatchers.Main) { status = message } }
                             startActivity(intent)
@@ -40,7 +49,9 @@ class MainActivity : ComponentActivity() {
                             throw cancelled
                         } catch (error: Exception) {
                             android.util.Log.w("CloudGI", "Connection failed: ${error.javaClass.simpleName}: ${error.message}")
-                            status = error.message ?: "连接失败，请重试。"
+                            connectionError = "阶段：$status\n" +
+                                (error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName)
+                            status = "连接未完成，请查看下方错误。"
                         } finally { connecting = false }
                     }
                 })

@@ -10,4 +10,5 @@ data class DiscoveredHost(
     val cloudGiName: String? = null,
     val status: String = "已发现服务，等待解析地址",
     val canConnect: Boolean = false,
+    val hostId: String? = null,
 )

@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import io.github.ruize128.cloudgi.client.DiscoveredHost
+import io.github.ruize128.cloudgi.client.chooseHostId
 import okhttp3.*
 import org.json.JSONObject
 import java.io.IOException
@@ -42,6 +43,8 @@ class CloudGiConnector(private val context: Context) {
     val discoveredHosts = _discoveredHosts.asStateFlow()
     private val _discoveryStatus = MutableStateFlow("尚未搜索")
     val discoveryStatus = _discoveryStatus.asStateFlow()
+    private val _selectedHostId = MutableStateFlow(saved.getString("hostId", null))
+    val selectedHostId = _selectedHostId.asStateFlow()
     private val _isSearching = MutableStateFlow(false)
     val isSearching = _isSearching.asStateFlow()
     private val discoveryGate = Mutex()
@@ -61,7 +64,7 @@ class CloudGiConnector(private val context: Context) {
         synchronized(observationLock) {
             for ((key, value) in observations.toMap()) {
                 if (value.address == endpoint.address && value.sunshinePort == endpoint.port) {
-                    observations[key] = value.copy(status = status, cloudGiName = host?.name, canConnect = host != null)
+                    observations[key] = value.copy(status = status, cloudGiName = host?.name, canConnect = host != null, hostId = host?.id)
                 }
             }
             _discoveredHosts.value = observations.values.toList()
@@ -70,6 +73,12 @@ class CloudGiConnector(private val context: Context) {
     }
 
     suspend fun refreshDiscovery() { discoverCandidates(force = true) }
+
+    fun selectHost(id: String) {
+        if (_discoveredHosts.value.none { it.hostId == id && it.canConnect }) return
+        saved.edit().putString("hostId", id).apply()
+        _selectedHostId.value = id
+    }
 
     private data class Endpoint(val address: String, val port: Int)
     private data class Host(val endpoint: Endpoint, val id: String, val name: String, val httpsPort: Int, val certificate: X509Certificate, val gameControl: String, val disconnectPolicy: String)
@@ -225,11 +234,15 @@ class CloudGiConnector(private val context: Context) {
     }
 
     private suspend fun discover(): Host {
-        val preferredId = saved.getString("hostId", null)
+        val preferredId = _selectedHostId.value
         val hosts = discoverCandidates(force = false)
-        if (preferredId != null) return hosts.firstOrNull { it.id == preferredId }
-            ?: throw IOException("未找到上次连接的 CloudGI 主机；下方列表显示了本次发现结果。")
-        return hosts.firstOrNull() ?: throw IOException(
+        val selected = chooseHostId(hosts.map { it.id }, preferredId)
+        if (selected != null) {
+            _selectedHostId.value = selected
+            return hosts.first { it.id == selected }
+        }
+        if (hosts.size > 1) throw IOException("发现多台 CloudGI 主机，请先在下方列表选择要连接的主机。")
+        throw IOException(
             if (_discoveredHosts.value.isEmpty()) "未收到 Sunshine 服务记录，请查看下方搜索状态。"
             else "已发现服务，但没有通过 CloudGI 接口检查的主机；请查看下方各主机的检查结果。")
     }
@@ -266,7 +279,7 @@ class CloudGiConnector(private val context: Context) {
                                 val known = hosts.values.firstOrNull { it.endpoint == endpoint }
                                 updateObservation(key) {
                                     DiscoveredHost(key, computer.name, source, endpoint.address, endpoint.port,
-                                        known?.name, if (known != null) "CloudGI 接口验证通过" else "地址已解析，等待接口检查", known != null)
+                                        known?.name, if (known != null) "CloudGI 接口验证通过" else "地址已解析，等待接口检查", known != null, hostId = known?.id)
                                 }
                                 if (seen.add(endpoint)) jobs.add(scope.launch {
                                     probe(endpoint)?.let { hosts[it.id] = it }

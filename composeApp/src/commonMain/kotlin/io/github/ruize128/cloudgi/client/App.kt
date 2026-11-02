@@ -33,6 +33,9 @@ fun App(
     platformName: String,
     onStartGame: (() -> Unit)? = null,
     connectionState: String = "",
+    connectionError: String? = null,
+    selectedHostId: String? = null,
+    onSelectHost: ((String) -> Unit)? = null,
     isConnecting: Boolean = false,
     discoveredHosts: List<DiscoveredHost> = emptyList(),
     discoveryStatus: String = "Android 端提供局域网搜索",
@@ -72,6 +75,18 @@ fun App(
                 Button(onClick = { onStartGame?.invoke() }, enabled = onStartGame != null && !isConnecting,
                     modifier = Modifier.fillMaxWidth()) { Text(if (isConnecting) "正在连接…" else "启动游戏") }
                 if (isConnecting) CircularProgressIndicator()
+                if (connectionError != null) {
+                    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer)) {
+                        SelectionContainer {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("连接失败", fontWeight = FontWeight.SemiBold)
+                                Text(connectionError)
+                            }
+                        }
+                    }
+                }
                 Text(connectionState.ifEmpty { if (onStartGame != null) "自动发现并配对主机，启动游戏后连接串流；断开会自动退出游戏" else "串流连接目前支持 Android" })
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -96,6 +111,13 @@ fun App(
                                         else "地址和端口尚未解析", style = MaterialTheme.typography.bodySmall)
                                     Text(host.status, style = MaterialTheme.typography.bodySmall,
                                         color = if (host.canConnect) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            if (host.canConnect && host.hostId != null) {
+                                val selected = host.hostId == selectedHostId
+                                Button(onClick = { onSelectHost?.invoke(host.hostId) },
+                                    enabled = onSelectHost != null && !selected && !isConnecting && !isSearching) {
+                                    Text(if (selected) "当前主机" else "选择此主机")
                                 }
                             }
                         }

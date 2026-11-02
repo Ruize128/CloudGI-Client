@@ -27,6 +27,7 @@ kotlin {
             implementation("org.jetbrains.compose.foundation:foundation:1.10.3")
             implementation("org.jetbrains.compose.material3:material3:1.9.0")
         }
+        commonTest.dependencies { implementation(kotlin("test")) }
         getByName("desktopMain").dependencies {
             implementation(compose.desktop.currentOs)
         }
