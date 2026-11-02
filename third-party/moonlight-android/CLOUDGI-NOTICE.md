@@ -22,6 +22,11 @@ Local source adaptations:
 4. Full HTTP request/response logging is disabled, including in debug builds, to keep handshake secrets out of diagnostics.
 5. The library wrapper uses the installed NDK 28.2.13676358, Java 17, and arm64-v8a, with the non-root build.
 
-The native stream Activity and its decoder, audio, and input implementation remain upstream code.
+6. CloudGI native touch mode forwards each Android pointer through Moonlight's existing native touch API,
+   bypasses mouse gestures (including three-finger keyboard activation), and cancels contacts on focus loss,
+   capture release, and disconnect. Unsupported hosts stop with an explicit message instead of silently using mouse input.
+   CloudGI passes this mode explicitly through an internal Activity extra; external mouse and stylus paths are retained.
+
+The native decoder/audio implementation remains upstream code. The stream Activity has the touch adaptations above.
 CloudGI keeps its own Android application ID and does not replace the official Moonlight application.
 The combined distributed Client must comply with the upstream GPLv3 license and third-party licenses.

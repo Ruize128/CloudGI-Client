@@ -119,6 +119,7 @@ fun App(
                         Info("当前环境", platformName)
                         Info("目标平台", "Android 优先，随后 iOS、macOS")
                         Info("当前阶段", "远程启动游戏 · 自动配对串流")
+                        Info("触屏输入", "原生多点触控")
                     }
                 }
                 Spacer(Modifier.height(4.dp))

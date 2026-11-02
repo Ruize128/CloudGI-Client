@@ -94,9 +94,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
     private int lastButtonState = 0;
 
-    // Only 2 touches are supported
+    // Only mouse-emulation gestures are limited to 2 touches; native input forwards every pointer.
     private final TouchContext[] touchContextMap = new TouchContext[2];
     private long threeFingerDownTime = 0;
+    private boolean nativeTouchEnabled;
+    private final android.util.SparseBooleanArray nativeTouchPointers = new android.util.SparseBooleanArray();
 
     private static final int REFERENCE_HORIZ_RES = 1280;
     private static final int REFERENCE_VERT_RES = 720;
@@ -180,6 +182,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     public static final String EXTRA_PC_NAME = "PcName";
     public static final String EXTRA_APP_HDR = "HDR";
     public static final String EXTRA_SERVER_CERT = "ServerCert";
+    public static final String EXTRA_NATIVE_TOUCH = "CloudGiNativeTouch";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -219,6 +222,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Read the stream preferences
         prefConfig = PreferenceConfiguration.readPreferences(this);
+        nativeTouchEnabled = getIntent().getBooleanExtra(EXTRA_NATIVE_TOUCH, false);
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
 
         // Enter landscape unless we're on a square screen
@@ -756,6 +760,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) cancelNativeTouches();
 
         // We can't guarantee the state of modifiers keys which may have
         // lifted while focus was not on us. Clear the modifier state.
@@ -1175,6 +1180,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     private void setInputGrabState(boolean grab) {
+        if (!grab) cancelNativeTouches();
         // Grab/ungrab the mouse cursor
         if (grab) {
             inputCaptureProvider.enableCapture();
@@ -1577,8 +1583,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         normalizedX = Math.min(normalizedX, streamView.getWidth());
         normalizedY = Math.min(normalizedY, streamView.getHeight());
 
-        normalizedX /= streamView.getWidth();
-        normalizedY /= streamView.getHeight();
+        normalizedX /= Math.max(1, streamView.getWidth());
+        normalizedY /= Math.max(1, streamView.getHeight());
 
         return new float[] { normalizedX, normalizedY };
     }
@@ -1720,6 +1726,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) cancelNativeTouches();
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
             // Move events may impact all active pointers
             boolean handledStylusEvent = false;
@@ -1765,18 +1772,29 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 normalizedCoords[0], normalizedCoords[1],
                 getPressureOrDistance(event, pointerIndex),
                 normalizedContactArea[0], normalizedContactArea[1],
-                getRotationDegrees(event, pointerIndex)) != MoonBridge.LI_ERR_UNSUPPORTED;
+                getRotationDegrees(event, pointerIndex)) == 0;
+    }
+
+    private void cancelNativeTouches() {
+        if (nativeTouchEnabled && conn != null && nativeTouchPointers.size() > 0) {
+            conn.sendTouchEvent(MoonBridge.LI_TOUCH_EVENT_CANCEL_ALL, 0, 0, 0, 0, 0, 0, MoonBridge.LI_ROT_UNKNOWN);
+            nativeTouchPointers.clear();
+            LimeLog.info("CloudGI native touches cancelled");
+        }
     }
 
     private boolean trySendTouchEvent(View view, MotionEvent event) {
         byte eventType = getLiTouchTypeFromEvent(event);
         if (eventType < 0) {
-            return false;
+            return true; // Ignore unrelated finger actions; never reinterpret them as mouse gestures.
         }
 
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) cancelNativeTouches();
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
             // Move events may impact all active pointers
             for (int i = 0; i < event.getPointerCount(); i++) {
+                // Focus loss/cancel may have released a finger that is physically still held.
+                if (!nativeTouchPointers.get(event.getPointerId(i))) continue;
                 if (!sendTouchEventForPointer(view, event, eventType, i)) {
                     return false;
                 }
@@ -1785,13 +1803,20 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
         else if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
             // Cancel impacts all active pointers
-            return conn.sendTouchEvent(MoonBridge.LI_TOUCH_EVENT_CANCEL_ALL, 0,
-                    0, 0, 0, 0, 0,
-                    MoonBridge.LI_ROT_UNKNOWN) != MoonBridge.LI_ERR_UNSUPPORTED;
+            cancelNativeTouches();
+            return true;
         }
         else {
             // Up, Down, and Hover events are specific to the action index
-            return sendTouchEventForPointer(view, event, eventType, event.getActionIndex());
+            int index = event.getActionIndex();
+            if ((eventType == MoonBridge.LI_TOUCH_EVENT_UP || eventType == MoonBridge.LI_TOUCH_EVENT_CANCEL) &&
+                    !nativeTouchPointers.get(event.getPointerId(index))) return true;
+            boolean sent = sendTouchEventForPointer(view, event, eventType, index);
+            if (sent) {
+                if (eventType == MoonBridge.LI_TOUCH_EVENT_DOWN) nativeTouchPointers.put(event.getPointerId(index), true);
+                else if (eventType == MoonBridge.LI_TOUCH_EVENT_UP || eventType == MoonBridge.LI_TOUCH_EVENT_CANCEL) nativeTouchPointers.delete(event.getPointerId(index));
+            }
+            return sent;
         }
     }
 
@@ -2015,6 +2040,18 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     return true;
                 }
 
+                // CloudGI native mode bypasses all mouse gestures, including the reserved three-finger tap.
+                if (nativeTouchEnabled) {
+                    // Fingers can already be on screen while the player is connecting.
+                    if (!connected) return true;
+                    if (!trySendTouchEvent(view, event)) {
+                        cancelNativeTouches();
+                        LimeLog.warning("CloudGI native touch send failed; stopping the stream");
+                        runOnUiThread(() -> { Toast.makeText(Game.this, "原生触控不可用，请检查 Host 的触控支持。", Toast.LENGTH_LONG).show(); finish(); });
+                    }
+                    return true;
+                }
+
                 // If this is the parent view, we'll offset our coordinates to appear as if they
                 // are relative to the StreamView like our StreamView touch events are.
                 float xOffset, yOffset;
@@ -2046,15 +2083,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
                     return true;
                 }
-
-                // TODO: Re-enable native touch when have a better solution for handling
-                // cancelled touches from Android gestures and 3 finger taps to activate
-                // the software keyboard.
-                /*if (!prefConfig.touchscreenTrackpad && trySendTouchEvent(view, event)) {
-                    // If this host supports touch events and absolute touch is enabled,
-                    // send it directly as a touch event.
-                    return true;
-                }*/
 
                 TouchContext context = getTouchContext(actionIndex);
                 if (context == null) {
@@ -2243,6 +2271,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     private void stopConnection() {
+        cancelNativeTouches();
         if (connecting || connected) {
             connecting = connected = false;
             updatePipAutoEnter();
@@ -2420,6 +2449,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void connectionStarted() {
+        if (nativeTouchEnabled) {
+            int status = conn.sendTouchEvent(MoonBridge.LI_TOUCH_EVENT_CANCEL_ALL, 0, 0, 0, 0, 0, 0, MoonBridge.LI_ROT_UNKNOWN);
+            if (status != 0) {
+                LimeLog.warning("CloudGI Host does not support native touch, result: " + status);
+                runOnUiThread(() -> { Toast.makeText(Game.this, "主机不支持原生多点触控，请检查 Sunshine 触控配置。", Toast.LENGTH_LONG).show(); finish(); });
+                return;
+            }
+            LimeLog.info("CloudGI native multi-touch mode enabled");
+        }
         runOnUiThread(new Runnable() {
             @Override
             public void run() {

@@ -124,12 +124,14 @@ class CloudGiConnector(private val context: Context) {
         android.preference.PreferenceManager.getDefaultSharedPreferences(context).edit()
             .putString("list_resolution", "1280x720").putString("list_fps", "60")
             .putInt("seekbar_bitrate_kbps", 10000).putBoolean("checkbox_enable_hdr", false)
-            .putBoolean("checkbox_show_onscreen_controls", false).apply()
+            .putBoolean("checkbox_show_onscreen_controls", false)
+            .putBoolean("checkbox_touchscreen_trackpad", false).apply()
         android.util.Log.i("CloudGI", "Opening native Desktop stream")
         // Host now owns a lease: a failed launch or killed client will be cleaned up after its timeout.
         control.request("game/stream/$operationId", post = true)
         Intent(context, CloudGiGameActivity::class.java).apply {
             putExtra(CloudGiGameActivity.EXTRA_REQUEST_ID, operationId)
+            putExtra(Game.EXTRA_NATIVE_TOUCH, true)
             putExtra(Game.EXTRA_HOST, host.endpoint.address)
             putExtra(Game.EXTRA_PORT, host.endpoint.port)
             putExtra(Game.EXTRA_HTTPS_PORT, host.httpsPort)
